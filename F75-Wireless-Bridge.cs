@@ -184,10 +184,11 @@ sealed class F75WirelessBridge : IDisposable
         if(Array.IndexOf(args,"--self-test")>=0) { F75BridgeTests.Run(); return; }
         bool mock=Array.IndexOf(args,"--mock")>=0;
         bool headless=Array.IndexOf(args,"--headless")>=0;
+        bool startMinimized=Array.IndexOf(args,"--start-minimized")>=0;
         try { using(F75WirelessBridge bridge=new F75WirelessBridge(mock)) {
             if(headless) { Console.WriteLine("F75 bridge listening on 127.0.0.1:"+Port+" (mock="+mock+")"); while(true) Thread.Sleep(1000); }
             Application.EnableVisualStyles(); Form f=new Form{Text=mock?"F75 MOCK - no hardware":"F75 Pro wireless companion",Width=760,Height=330};
-            Label info=new Label{Dock=DockStyle.Top,Height=75,Padding=new Padding(12),Text="Keep this companion open. In OpenRGB > SDK Client, connect to 127.0.0.1, port 6743.\r\nWired USB cable unplugged; keyboard in 2.4 GHz mode.\r\nLighting is temporary. Close this window or click Release to stop sending colors."};
+            Label info=new Label{Dock=DockStyle.Top,Height=75,Padding=new Padding(12),Text="Keep this companion running. In OpenRGB > SDK Client, connect to 127.0.0.1, port 6743.\r\nWired USB cable unplugged; keyboard in 2.4 GHz mode.\r\nMinimize or close this window to keep it running in the system tray."};
             FlowLayoutPanel buttons=new FlowLayoutPanel{Dock=DockStyle.Top,Height=75,Padding=new Padding(10)};
             string[] labels={"Red","Green","Blue","Choose color","Key map test","Release"};
             for(int i=0;i<labels.Length;i++) { int choice=i; Button b=new Button{Text=labels[i],AutoSize=true,Height=34}; buttons.Controls.Add(b);
@@ -197,8 +198,22 @@ sealed class F75WirelessBridge : IDisposable
             }
             Label state=new Label{Dock=DockStyle.Fill,Padding=new Padding(12),Font=new Font("Segoe UI",11)};
             f.Controls.Add(state); f.Controls.Add(buttons); f.Controls.Add(info);
+            bool exiting=false;
+            ContextMenuStrip trayMenu=new ContextMenuStrip();
+            ToolStripMenuItem showItem=new ToolStripMenuItem("Show");
+            ToolStripMenuItem exitItem=new ToolStripMenuItem("Exit");
+            trayMenu.Items.Add(showItem); trayMenu.Items.Add(exitItem);
+            NotifyIcon tray=new NotifyIcon { Icon=SystemIcons.Application, Text="F75 Pro wireless companion", ContextMenuStrip=trayMenu, Visible=true };
+            Action hide=delegate { f.Hide(); f.ShowInTaskbar=false; };
+            Action show=delegate { f.ShowInTaskbar=true; f.Show(); f.WindowState=FormWindowState.Normal; f.Activate(); };
+            showItem.Click+=delegate { show(); };
+            tray.DoubleClick+=delegate { show(); };
+            exitItem.Click+=delegate { exiting=true; f.Close(); };
+            f.Resize+=delegate { if(f.WindowState==FormWindowState.Minimized) hide(); };
+            f.FormClosing+=delegate(object sender,FormClosingEventArgs e) { if(!exiting && e.CloseReason==CloseReason.UserClosing) { e.Cancel=true; hide(); } };
+            if(startMinimized) { f.WindowState=FormWindowState.Minimized; f.ShowInTaskbar=false; f.Shown+=delegate { hide(); }; }
             System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer{Interval=500}; timer.Tick+=delegate { state.Text=bridge.Status; }; timer.Start();
-            Application.Run(f); timer.Dispose();
+            Application.Run(f); timer.Dispose(); tray.Visible=false; tray.Dispose(); trayMenu.Dispose();
         }} catch(Exception ex) { if(headless) { Console.Error.WriteLine(ex); Environment.ExitCode=1; } else MessageBox.Show(ex.Message,"F75 wireless companion"); }
     }
 }
