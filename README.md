@@ -1,6 +1,6 @@
 # AULA F75 Pro wireless RGB for OpenRGB
 
-An experimental Windows companion connects a tested AULA F75 Pro 2.4 GHz receiver to OpenRGB through a local SDK connection. Version 0.2 adds smoother rendering, a simple interface, a keyboard tray/taskbar icon, pause/resume and live process statistics. The owner described the corrected Smooth build as “Super smooth.” This is a standalone companion, not an official OpenRGB driver.
+An experimental Windows companion connects a tested AULA F75 Pro 2.4 GHz receiver to OpenRGB through a local SDK connection. Version 0.2 adds smoother rendering, a simple interface, a keyboard tray/taskbar icon, pause/resume and live process statistics. Version 0.2.1 defaults to an OLED-style black window with dark controls, title bar and tray menu. The owner described the corrected Smooth build as “Super smooth.” This is a standalone companion, not an official OpenRGB driver.
 
 ## Setup
 
@@ -31,7 +31,7 @@ Smooth uses 5 ms inter-report spacing, a minimum 50 ms frame interval, and a sus
 
 With Smooth off, exact colors use one complete 6–29-report frame, 12 ms spacing, a minimum 80 ms frame interval and the same report budget. This is slower but preserves all per-key RGB values.
 
-**Battery runtime has not been measured.** The owner confirmed idle sleep on the previous build; version 0.2 sleep/wake needs a fresh check. Bounded traffic and fewer solid-color reports are useful proxies, not proof of battery neutrality. Compare charge intervals at the same brightness/effect and similar active use. Pause or exit if sleep regresses. UI CPU/memory readings describe the PC process, not keyboard power.
+**Battery runtime has not been measured.** The owner visually confirmed idle sleep still works with Smooth rendering on version 0.2. This is visible behavior, not a power measurement; the 0.2.1 theme update changes presentation only. Bounded traffic and fewer solid-color reports are useful proxies, not proof of battery neutrality. Compare charge intervals at the same brightness/effect and similar active use. Pause or exit if sleep regresses. UI CPU/memory readings describe the PC process, not keyboard power.
 
 ## Validation and building
 

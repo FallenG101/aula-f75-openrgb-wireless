@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-11-11
+
+- Default to an OLED-style black main window, dark controls, dark title bar and dark tray menu.
+- Preserve the rendering and radio behavior from 0.2.
+- Owner visually confirmed idle sleep still works on the Smooth build. Battery runtime, Windows login startup and PC suspend/resume remain unmeasured or untested.
+- Build and existing offline/mock-runtime checks pass; visually verified the deployed dark window and OpenRGB reconnection.
+
 ## 0.2 — 2026-11-11
 
 - Optional Smooth rendering: compact solid commands and complete frames with at most eight input colors. Preserve small palettes and black/nonblack boundaries.
@@ -8,7 +15,7 @@
 - Save rendering preference; preserve minimize/close-to-tray and --start-minimized.
 - Reopen the existing 0.2 instance on second launch; add --exit.
 - Pass 21,989 offline checks and five mock SDK/runtime checks without HID access.
-- Owner visually confirmed the corrected animation is very smooth. Battery runtime, 0.2 idle sleep/wake and full login/suspend tests remain pending.
+- Owner visually confirmed the corrected animation is very smooth. At this release, battery runtime, idle sleep/wake and full login/suspend tests were pending; see the 0.2.1 follow-up above.
 
 ## 0.1 — 2026-11-08
 
