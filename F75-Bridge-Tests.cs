@@ -6,6 +6,30 @@ using System.Collections.Generic;
 
 static class F75BridgeTests
 {
+    internal static void RunRuntime() {
+        try {
+            using(F75WirelessBridge bridge=new F75WirelessBridge(true,0)) {
+                bridge.Smooth=true;bridge.Solid(255);System.Threading.Thread.Sleep(400);
+                Check(bridge.Reports>0 && bridge.Reports<=9,"solid pacing at most 20 fps");
+                bridge.Pause(true);long stopped=bridge.Reports;
+                using(System.Net.Sockets.TcpClient client=new System.Net.Sockets.TcpClient("127.0.0.1",bridge.ListeningPort)) {
+                    byte[] single=new byte[24];single[0]=79;single[1]=82;single[2]=71;single[3]=66;
+                    Array.Copy(BitConverter.GetBytes((uint)1052),0,single,8,4);single[12]=8;single[20]=33;
+                    client.GetStream().Write(single,0,single.Length);
+                    System.Threading.Thread.Sleep(200);
+                    Check(bridge.Updates==2,"SDK update accepted while paused");
+                    Check(bridge.Reports==stopped,"pause survives incoming SDK updates without lighting writes");
+                    bridge.Pause(false);System.Threading.Thread.Sleep(200);Check(bridge.Reports>stopped,"resume restarts lighting");
+                }
+                bridge.Pause(true);bridge.Smooth=false;
+                uint[] many=new uint[80];for(int k=0;k<80;k++)many[k]=(uint)(k*197381+1);
+                bridge.SetColors(many,"runtime test");bridge.Pause(false);
+                System.Threading.Thread.Sleep(50);bridge.Pause(true);stopped=bridge.Reports;
+                System.Threading.Thread.Sleep(100);Check(stopped==bridge.Reports,"pause stops an in-flight multipart frame");
+            }
+            File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-runtime-test.txt"),"PASS: "+checks+" runtime checks; mock SDK, pacing, pause and resume. No HID access performed.\r\n");
+        } catch(Exception ex) {File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-runtime-test.txt"),ex.ToString());Environment.ExitCode=1;}
+    }
     static int checks;
     static void Check(bool condition,string message) { checks++; if(!condition) throw new Exception("FAIL: "+message); }
     static string Str(BinaryReader r) { int n=r.ReadUInt16(); byte[] b=r.ReadBytes(n); Check(b.Length==n && b[n-1]==0,"terminated SDK string"); return Encoding.UTF8.GetString(b,0,n-1); }
@@ -77,7 +101,29 @@ static class F75BridgeTests
             List<byte[]> mapping=F75WirelessBridge.Refresh(pattern,true,0);
             Check(mapping.Count==1 && mapping[0].Length==100 && F75Wire.Frame(mapping[0]).Count==8,"four-key test is one eight-chunk message");
             bool rejected=false; try { F75Wire.Frame(new byte[401]); } catch(ArgumentException) { rejected=true; } Check(rejected,"oversized HID payload rejected");
-            string report="PASS: "+checks+" checks; packet encoding, captured example, 80-key mapping, SDK 0-3 serialization, malformed RGB rejection. No HID access performed.";
+            uint[] fade=new uint[80];
+            for(int level=0;level<256;level++) {
+                for(int k=0;k<80;k++) fade[k]=(uint)level;
+                List<byte[]> compact=F75Render.Plan(fade,true);
+                Check(compact.Count==1 && compact[0][4]==0x23 && compact[0][5]==level && F75Wire.ChecksumValid(compact[0]),"solid brightness preserved in compact packet");
+                Check(F75Render.Plan(fade,false).Count==6,"exact fallback keeps complete solid frame");
+            }
+            for(int k=0;k<80;k++) fade[k]=(uint)(k*197381);
+            List<byte[]> smooth=F75Render.Plan(fade,true);
+            Check(smooth.Count<=8,"animation palette bounds full-frame report count");
+            List<byte> payload=new List<byte>(); foreach(byte[] f in smooth)for(int k=0;k<f[4]-16;k++)payload.Add(f[k+5]);
+            Check(Decode(new List<byte[]>{payload.ToArray()}).Count==80,"smooth frame retains all 80 keys");
+            Random random=new Random(7502);
+            for(int sample=0;sample<100;sample++) {
+                for(int k=0;k<80;k++)fade[k]=k%9==0?0u:(uint)random.Next(1,0x1000000);
+                smooth=F75Render.Plan(fade,true);Check(smooth.Count<=8,"random palette report bound");
+                payload.Clear();foreach(byte[] f in smooth)for(int k=0;k<f[4]-16;k++)payload.Add(f[k+5]);
+                decoded=Decode(new List<byte[]>{payload.ToArray()});Check(new HashSet<uint>(decoded.Values).Count<=8,"at most eight palette colors");
+                for(int k=0;k<80;k++)Check((decoded[F75WirelessBridge.Hardware[k]]==0)==(fade[k]==0),"black and nonblack keys remain distinct");
+            }
+            smooth=F75Render.Plan(pattern,true);payload.Clear();foreach(byte[] f in smooth)for(int k=0;k<f[4]-16;k++)payload.Add(f[k+5]);
+            decoded=Decode(new List<byte[]>{payload.ToArray()});for(int k=0;k<80;k++)Check(decoded[F75WirelessBridge.Hardware[k]]==pattern[k],"small palette colors unchanged");
+            string report="PASS: "+checks+" checks; framing, mapping, SDK validation, all 256 solid brightness levels and reduced-palette coverage. No HID access performed.";
             Console.WriteLine(report); File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-self-test.txt"),report+Environment.NewLine);
         } catch(Exception ex) { Console.Error.WriteLine(ex); File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-self-test.txt"),ex.ToString()); Environment.ExitCode=1; }
     }

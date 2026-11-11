@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Windows.Forms;
 using System.Drawing;
+using System.Diagnostics;
 
 sealed class F75WirelessBridge : IDisposable
 {
@@ -35,15 +36,22 @@ sealed class F75WirelessBridge : IDisposable
     readonly List<Client> clients=new List<Client>();
     readonly bool mock;
     volatile bool running=true, available;
-    uint[] colors=new uint[80]; bool enabled; int generation;
+    uint[] colors=new uint[80]; bool enabled, paused; int generation;
+    volatile bool smooth;
+    internal bool Smooth { get { return smooth; } set { smooth=value; } }
+    internal void Pause(bool value) { lock(gate) { paused=value; generation++; } }
+    internal bool Paused { get { lock(gate) return paused; } }
+    internal long Reports { get { lock(gate) return sentFrames; } }
+    internal long Updates { get { lock(gate) return updates; } }
     long sentFrames, updates; string status="Starting"; TcpListener listener;
     Thread writer, acceptor; string logPath;
     sealed class Client { public TcpClient Socket; public object Gate=new object(); public uint Version; }
     static byte[] FlattenHardware() { List<byte> v=new List<byte>(); foreach(byte[] row in HardwareRows) v.AddRange(row); return v.ToArray(); }
     static string[] FlattenNames() { List<string> v=new List<string>(); foreach(string[] row in Names) v.AddRange(row); return v.ToArray(); }
-    internal F75WirelessBridge(bool test) {
+    internal int ListeningPort { get { return ((IPEndPoint)listener.LocalEndpoint).Port; } }
+    internal F75WirelessBridge(bool test,int port=Port) {
         mock=test; logPath=System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,test ? "F75-bridge-mock.log" : "F75-bridge.log");
-        listener=new TcpListener(IPAddress.Loopback,Port); listener.Start();
+        listener=new TcpListener(IPAddress.Loopback,port); listener.Start();
         Log("Started on 127.0.0.1:"+Port+"; "+(mock?"MOCK: no HID access":"only 3554:FA09 revision 3000, descriptor-pinned, model CD"));
         writer=new Thread(WriteLoop){IsBackground=true}; writer.Start();
         acceptor=new Thread(AcceptLoop){IsBackground=true}; acceptor.Start();
@@ -65,32 +73,32 @@ sealed class F75WirelessBridge : IDisposable
     internal void Release() { lock(gate) { enabled=false; generation++; } Log("Lighting released; no reset/save command sent."); }
     void SetAvailable(bool value) { if(available==value) return; available=value; BroadcastChanged(); }
     void WriteLoop() {
-        F75HidTransport transport=null; int previousGeneration=-1; DateTime last=DateTime.MinValue;
+        F75HidTransport transport=null; Stopwatch clock=Stopwatch.StartNew(); double nextFrameAt=0;
         try { while(running) {
             if(!mock && transport==null) {
-                try { transport=F75HidTransport.Open(); previousGeneration=-1; SetStatus("Receiver identified: model CD. OpenRGB connection: 127.0.0.1:"+Port); SetAvailable(true); Log("Validated receiver: "+transport.Path); }
+                try { transport=F75HidTransport.Open(); nextFrameAt=0; SetStatus("Receiver identified: model CD. OpenRGB connection: 127.0.0.1:"+Port); SetAvailable(true); Log("Validated receiver: "+transport.Path); }
                 catch(Exception ex) { SetAvailable(false); SetStatus(ex.Message); Log("Waiting for receiver: "+ex.Message); for(int k=0;k<20 && running;k++) Thread.Sleep(100); continue; }
             }
             if(mock) { SetAvailable(true); SetStatus("MOCK server - no keyboard access"); }
-            uint[] snapshot; int gen; bool active;
-            lock(gate) { snapshot=(uint[])colors.Clone(); gen=generation; active=enabled; }
-            if(!active) { previousGeneration=-1; Thread.Sleep(25); continue; }
+            bool active;lock(gate) active=enabled && !paused;
+            if(!active) { Thread.Sleep(25); continue; }
+            if(clock.Elapsed.TotalMilliseconds<nextFrameAt){Thread.Sleep(5);continue;}
+            uint[] snapshot;lock(gate)snapshot=(uint[])colors.Clone();
+            bool renderSmooth=Smooth;
             try {
                 // On this unit, an Escape-only refresh leaves the other keys dark. Refresh the
                 // complete keyboard frame, including unchanged keys. The firmware cause is unproven.
-                List<byte[]> messages=Refresh(snapshot,gen!=previousGeneration,(DateTime.UtcNow-last).TotalMilliseconds);
-                if(messages.Count>0) last=DateTime.UtcNow;
-                foreach(byte[] message in messages) {
-                    foreach(byte[] packet in F75Wire.Frame(message)) {
+                List<byte[]> packets=F75Render.Plan(snapshot,renderSmooth);
+                // Bound long-term radio traffic below the original full-frame renderer.
+                double interval=Math.Max(renderSmooth?50:80,packets.Count*1000.0/70.0);
+                nextFrameAt=clock.Elapsed.TotalMilliseconds+interval;
+                    foreach(byte[] packet in packets) {
                         lock(gate) {
-                            if(!running || !enabled) break;
+                            if(!running || !enabled || paused) break;
                             if(!mock) transport.Write(packet); sentFrames++;
                         }
-                        Thread.Sleep(12);
+                        Thread.Sleep(renderSmooth?5:12);
                     }
-                    lock(gate) { if(!running || !enabled) break; }
-                }
-                previousGeneration=gen;
             } catch(Exception ex) {
                 Log("HID failure: "+ex.Message); SetStatus(ex.Message); SetAvailable(false);
                 if(transport!=null) transport.Dispose(); transport=null;
@@ -150,7 +158,7 @@ sealed class F75WirelessBridge : IDisposable
     internal static byte[] Description(uint version,bool mock,uint[] snapshot=null) {
         using(MemoryStream m=new MemoryStream()) { BinaryWriter w=new BinaryWriter(m);
             w.Write((uint)0); w.Write((uint)5); Str(w,mock?"TEST F75 - no hardware":"AULA F75 Pro (2.4 GHz)");
-            if(version>=1) Str(w,"AULA"); Str(w,"Transient wireless RGB via local SDK bridge"); Str(w,"bridge 0.1 / model CD"); Str(w,""); Str(w,"127.0.0.1:6743 / 3554:FA09 / MI_01 Col01");
+            if(version>=1) Str(w,"AULA"); Str(w,"Transient wireless RGB via local SDK bridge"); Str(w,"bridge 0.2 / model CD"); Str(w,""); Str(w,"127.0.0.1:6743 / 3554:FA09 / MI_01 Col01");
             w.Write((ushort)1); w.Write(0); Str(w,"Direct"); w.Write((uint)0); w.Write((uint)32); w.Write((uint)0); w.Write((uint)0);
             if(version>=3) { w.Write((uint)0); w.Write((uint)0); }
             w.Write((uint)0); w.Write((uint)0); w.Write((uint)0); if(version>=3) w.Write((uint)0);
@@ -182,38 +190,22 @@ sealed class F75WirelessBridge : IDisposable
     static uint RGB(Color c) { return (uint)(c.R | c.G<<8 | c.B<<16); }
     [STAThread] static void Main(string[] args) {
         if(Array.IndexOf(args,"--self-test")>=0) { F75BridgeTests.Run(); return; }
+        if(Array.IndexOf(args,"--runtime-test")>=0) { F75BridgeTests.RunRuntime(); return; }
+        if(Array.IndexOf(args,"--export-icon")>=0) { using(Icon icon=F75Experience.MakeIcon())using(FileStream file=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75.ico")))icon.Save(file);return; }
         bool mock=Array.IndexOf(args,"--mock")>=0;
         bool headless=Array.IndexOf(args,"--headless")>=0;
         bool startMinimized=Array.IndexOf(args,"--start-minimized")>=0;
+        bool owner;string instance=mock?"F75WirelessBridgePreview02":"F75WirelessBridge02";
+        if(Array.IndexOf(args,"--exit")>=0){try{using(EventWaitHandle quit=EventWaitHandle.OpenExisting("Local\\"+instance+"Quit"))quit.Set();}catch(WaitHandleCannotBeOpenedException){}return;}
+        using(Mutex singleton=new Mutex(true,"Local\\"+instance,out owner)) {
+            if(!owner){try{using(EventWaitHandle wake=EventWaitHandle.OpenExisting("Local\\"+instance+"Show"))wake.Set();}catch(WaitHandleCannotBeOpenedException){}return;}
+            using(EventWaitHandle show=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\"+instance+"Show"))
+            using(EventWaitHandle quit=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\"+instance+"Quit"))
         try { using(F75WirelessBridge bridge=new F75WirelessBridge(mock)) {
-            if(headless) { Console.WriteLine("F75 bridge listening on 127.0.0.1:"+Port+" (mock="+mock+")"); while(true) Thread.Sleep(1000); }
-            Application.EnableVisualStyles(); Form f=new Form{Text=mock?"F75 MOCK - no hardware":"F75 Pro wireless companion",Width=760,Height=330};
-            Label info=new Label{Dock=DockStyle.Top,Height=75,Padding=new Padding(12),Text="Keep this companion running. In OpenRGB > SDK Client, connect to 127.0.0.1, port 6743.\r\nWired USB cable unplugged; keyboard in 2.4 GHz mode.\r\nMinimize or close this window to keep it running in the system tray."};
-            FlowLayoutPanel buttons=new FlowLayoutPanel{Dock=DockStyle.Top,Height=75,Padding=new Padding(10)};
-            string[] labels={"Red","Green","Blue","Choose color","Key map test","Release"};
-            for(int i=0;i<labels.Length;i++) { int choice=i; Button b=new Button{Text=labels[i],AutoSize=true,Height=34}; buttons.Controls.Add(b);
-                b.Click+=delegate { if(choice<3) bridge.Solid(choice==0?0xFFu:choice==1?0xFF00u:0xFF0000u);
-                    else if(choice==3) { using(ColorDialog d=new ColorDialog()) if(d.ShowDialog(f)==DialogResult.OK) bridge.Solid(RGB(d.Color)); }
-                    else if(choice==4) bridge.KeyTest(); else bridge.Release(); };
-            }
-            Label state=new Label{Dock=DockStyle.Fill,Padding=new Padding(12),Font=new Font("Segoe UI",11)};
-            f.Controls.Add(state); f.Controls.Add(buttons); f.Controls.Add(info);
-            bool exiting=false;
-            ContextMenuStrip trayMenu=new ContextMenuStrip();
-            ToolStripMenuItem showItem=new ToolStripMenuItem("Show");
-            ToolStripMenuItem exitItem=new ToolStripMenuItem("Exit");
-            trayMenu.Items.Add(showItem); trayMenu.Items.Add(exitItem);
-            NotifyIcon tray=new NotifyIcon { Icon=SystemIcons.Application, Text="F75 Pro wireless companion", ContextMenuStrip=trayMenu, Visible=true };
-            Action hide=delegate { f.Hide(); f.ShowInTaskbar=false; };
-            Action show=delegate { f.ShowInTaskbar=true; f.Show(); f.WindowState=FormWindowState.Normal; f.Activate(); };
-            showItem.Click+=delegate { show(); };
-            tray.DoubleClick+=delegate { show(); };
-            exitItem.Click+=delegate { exiting=true; f.Close(); };
-            f.Resize+=delegate { if(f.WindowState==FormWindowState.Minimized) hide(); };
-            f.FormClosing+=delegate(object sender,FormClosingEventArgs e) { if(!exiting && e.CloseReason==CloseReason.UserClosing) { e.Cancel=true; hide(); } };
-            if(startMinimized) { f.WindowState=FormWindowState.Minimized; f.ShowInTaskbar=false; f.Shown+=delegate { hide(); }; }
-            System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer{Interval=500}; timer.Tick+=delegate { state.Text=bridge.Status; }; timer.Start();
-            Application.Run(f); timer.Dispose(); tray.Visible=false; tray.Dispose(); trayMenu.Dispose();
+            if(headless) { Console.WriteLine("F75 bridge listening on 127.0.0.1:"+Port+" (mock="+mock+")"); while(!quit.WaitOne(1000)){} return; }
+            F75Experience.Run(bridge,startMinimized,mock,show,quit);
         }} catch(Exception ex) { if(headless) { Console.Error.WriteLine(ex); Environment.ExitCode=1; } else MessageBox.Show(ex.Message,"F75 wireless companion"); }
+        }
     }
 }
+

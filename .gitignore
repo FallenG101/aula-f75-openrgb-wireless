@@ -1,0 +1,7 @@
+*.log
+F75-settings.txt
+F75-preview-settings.txt
+F75-self-test.txt
+F75-runtime-test.txt
+F75-SDK-check.json
+F75-diagnostics/

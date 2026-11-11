@@ -71,7 +71,8 @@ sealed class F75HidTransport : IDisposable
     }
     public void Write(byte[] frame) {
         // No arbitrary HID writes: only bounded, checksummed transient lighting packets.
-        if(frame.Length!=20 || frame[0]!=0x13 || frame[1]!=0x88 || frame[2]<1 || frame[2]>29 || frame[3]>=frame[2] || frame[4]<0x11 || frame[4]>0x1E || !F75Wire.ChecksumValid(frame))
+        bool solid=frame.Length==20 && frame[2]==1 && frame[3]==0 && frame[4]==0x23;
+        if(frame.Length!=20 || frame[0]!=0x13 || frame[1]!=0x88 || frame[2]<1 || frame[2]>29 || frame[3]>=frame[2] || (!solid && (frame[4]<0x11 || frame[4]>0x1E)) || !F75Wire.ChecksumValid(frame))
             throw new InvalidOperationException("Unsafe lighting frame rejected.");
         if(device==IntPtr.Zero || hid_write(device,frame,(UIntPtr)20)!=20) {
             IntPtr error=hid_error(device); throw new InvalidOperationException("Receiver write failed: "+(error==IntPtr.Zero ? "disconnected" : Marshal.PtrToStringUni(error)));
