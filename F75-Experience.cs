@@ -91,12 +91,12 @@ static class F75Experience {
             f.BackColor=Background;f.ForeColor=Text;f.Font=new Font("Segoe UI",10);f.HandleCreated+=delegate{DarkTitleBar(f);};
             TableLayoutPanel page=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=7};f.Controls.Add(page);
             Label title=new Label{Text="F75",Font=new Font("Segoe UI",26,FontStyle.Bold),AutoSize=true,ForeColor=Text};
-            page.Controls.Add(title);page.Controls.Add(new Label{Text="Wireless lighting companion  ·  v0.2.1",AutoSize=true,ForeColor=Muted});
+            page.Controls.Add(title);page.Controls.Add(new Label{Text="Wireless lighting companion  ·  v0.2.3 candidate",AutoSize=true,ForeColor=Muted});
             Label status=new Label{AutoSize=false,Dock=DockStyle.Fill,Height=76,Padding=new Padding(0,12,0,6),ForeColor=Accent};page.Controls.Add(status);
             bool exiting=false;
             FlowLayoutPanel actions=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill};
             actions.Controls.Add(Button("Choose color",delegate{using(ColorDialog d=new ColorDialog())if(d.ShowDialog(f)==DialogResult.OK)bridge.Solid((uint)(d.Color.R|d.Color.G<<8|d.Color.B<<16));}));
-            Button pause=null;pause=Button("Pause lighting",delegate{bridge.Pause(!bridge.Paused);pause.Text=bridge.Paused?"Resume lighting":"Pause lighting";});actions.Controls.Add(pause);
+            Button pause=null;pause=Button(bridge.Paused?"Resume lighting":"Pause lighting",delegate{bridge.Pause(!bridge.Paused);pause.Text=bridge.Paused?"Resume lighting":"Pause lighting";});actions.Controls.Add(pause);
             actions.Controls.Add(Button("Exit",delegate{exiting=true;f.Close();}));page.Controls.Add(actions);
             CheckBox smooth=new CheckBox{Text="Smooth rendering (experimental)",AutoSize=true,FlatStyle=FlatStyle.Flat,ForeColor=Text,BackColor=Background,Padding=new Padding(0,8,0,8)};
             string settings=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,mock?"F75-preview-settings.txt":"F75-settings.txt");

@@ -8,9 +8,10 @@ static class F75BridgeTests
 {
     internal static void RunRuntime() {
         try {
-            using(F75WirelessBridge bridge=new F75WirelessBridge(true,0)) {
+            List<double> reportTimes=new List<double>();string timing="";
+            using(F75WirelessBridge bridge=new F75WirelessBridge(true,0,delegate(double t){lock(reportTimes)reportTimes.Add(t);})) {
                 bridge.Smooth=true;bridge.Solid(255);System.Threading.Thread.Sleep(400);
-                Check(bridge.Reports>0 && bridge.Reports<=9,"solid pacing at most 20 fps");
+                Check(bridge.Reports>0 && bridge.Reports<=5,"solid pacing at most 10 fps");
                 bridge.Pause(true);long stopped=bridge.Reports;
                 using(System.Net.Sockets.TcpClient client=new System.Net.Sockets.TcpClient("127.0.0.1",bridge.ListeningPort)) {
                     byte[] single=new byte[24];single[0]=79;single[1]=82;single[2]=71;single[3]=66;
@@ -26,8 +27,22 @@ static class F75BridgeTests
                 bridge.SetColors(many,"runtime test");bridge.Pause(false);
                 System.Threading.Thread.Sleep(50);bridge.Pause(true);stopped=bridge.Reports;
                 System.Threading.Thread.Sleep(100);Check(stopped==bridge.Reports,"pause stops an in-flight multipart frame");
+                bridge.Smooth=true;lock(reportTimes)reportTimes.Clear();
+                bridge.SetColors(many,"paced full-frame test");bridge.Pause(false);
+                System.Threading.Thread.Sleep(1600);bridge.Pause(true);
+                lock(reportTimes){
+                    Check(reportTimes.Count>=8,"multipart frame exercised");
+                    for(int k=1;k<reportTimes.Count;k++)Check(reportTimes[k]-reportTimes[k-1]>=F75Pacing.ReportGapMs,"no short report bursts");
+                    for(int k=8;k<reportTimes.Count;k+=8)Check(reportTimes[k]-reportTimes[k-1]>=F75Pacing.FrameQuietMs,"quiet between frames");
+                    if(reportTimes.Count>8)Check(reportTimes[8]-reportTimes[0]>=F75Pacing.FrameInterval(8),"sustained report budget enforced");
+                    if(reportTimes.Count>16){
+                        double minGap=double.MaxValue;for(int k=1;k<reportTimes.Count;k++)minGap=Math.Min(minGap,reportTimes[k]-reportTimes[k-1]);
+                        int frames=(reportTimes.Count-1)/8;double frameMs=(reportTimes[frames*8]-reportTimes[0])/frames;
+                        timing=String.Format(System.Globalization.CultureInfo.InvariantCulture,"Mock-only timing: minimum report gap {0:F2}ms; mean full-frame interval {1:F2}ms ({2:F2} frames/s). Not a hardware measurement.\r\n",minGap,frameMs,1000/frameMs);
+                    }
+                }
             }
-            File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-runtime-test.txt"),"PASS: "+checks+" runtime checks; mock SDK, pacing, pause and resume. No HID access performed.\r\n");
+            File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-runtime-test.txt"),"PASS: "+checks+" runtime checks; mock SDK, pacing, pause and resume. No HID access performed.\r\n"+timing);
         } catch(Exception ex) {File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"F75-runtime-test.txt"),ex.ToString());Environment.ExitCode=1;}
     }
     static int checks;
@@ -69,6 +84,7 @@ static class F75BridgeTests
     }
     internal static void Run() {
         try {
+            for(int reports=1;reports<=29;reports++){Check(F75Pacing.FrameInterval(reports)>=100,"frame ceiling 10 fps");Check(F75Pacing.FrameInterval(reports)>=reports*1000.0/60.0,"sustained budget 60 reports per second");}
             Check(F75WirelessBridge.Hardware.Length==80 && F75WirelessBridge.LedNames.Length==80,"key count");
             HashSet<byte> unique=new HashSet<byte>(F75WirelessBridge.Hardware); Check(unique.Count==80,"hardware IDs unique");
             uint[] c=new uint[80]; for(int k=0;k<80;k++) c[k]=0xFF;

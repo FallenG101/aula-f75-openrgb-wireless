@@ -27,9 +27,9 @@ Only one 0.2 copy runs per user session. An older bridge can still conflict on p
 
 Smooth mode sends a whole-board solid color in one compact report, preserving 8-bit brightness. Multicolor frames use at most eight colors selected from the current input frame and at most eight reports. Small palettes retain exact colors; complex gradients lose detail. Black stays black and nonblack keys are never mapped to black. The first candidate's channel rounding was replaced after it produced unwanted hues.
 
-Smooth uses 5 ms inter-report spacing, a minimum 50 ms frame interval, and a sustained budget of 70 lighting reports/second. Calculated ceilings are 20 solid updates/second and 8.75 updates/second for eight-report frames. USB write time can lower these; they are not measured FPS guarantees. Incoming frames are coalesced to the latest state and planned only when due.
+Version 0.2.3 enforces at least 15 ms between report starts, at least 15 ms quiet after each frame, a minimum 100 ms frame interval, and a sustained budget of 60 lighting reports/second. Calculated ceilings are 10 solid updates/second and 7.5 updates/second for eight-report frames. One-shot Windows high-resolution timers avoid repeated short polling sleeps; no global timer-resolution setting is changed. USB write time can lower these; they are not measured FPS guarantees. Incoming frames are coalesced to the latest state and planned only when due.
 
-With Smooth off, exact colors use one complete 6–29-report frame, 12 ms spacing, a minimum 80 ms frame interval and the same report budget. This is slower but preserves all per-key RGB values.
+With Smooth off, exact colors use one complete 6–29-report frame with the same conservative timing. This is slower but preserves all per-key RGB values.
 
 **Battery runtime has not been measured.** The owner visually confirmed idle sleep still works with Smooth rendering on version 0.2. This is visible behavior, not a power measurement; the 0.2.1 theme update changes presentation only. Bounded traffic and fewer solid-color reports are useful proxies, not proof of battery neutrality. Compare charge intervals at the same brightness/effect and similar active use. Pause or exit if sleep regresses. UI CPU/memory readings describe the PC process, not keyboard power.
 
@@ -37,14 +37,22 @@ With Smooth off, exact colors use one complete 6–29-report frame, 12 ms spacin
 
 Previous-build hardware checks confirmed steady whole-board red, Escape/W/Space/Right Arrow mapping, individual W magenta, normal typing and receiver unplug/replug recovery. The owner confirmed the corrected 0.2 animation is very smooth. All 80 physical positions, compact solid/brightness behavior, maximum-color exact frames, Windows login and PC suspend/resume have not been exhaustively retested on 0.2.
 
-The build passes **21,989 offline checks** for framing, checksums, mapping, SDK versions 0–3, malformed input, all 256 solid brightness levels and randomized palette coverage, plus **five mock runtime checks** for SDK updates, pacing, pause and resume. These do not access HID hardware and do not replace visual tests.
+The build passes **22,047 offline checks** for framing, checksums, mapping, SDK versions 0–3, malformed input, all 256 solid brightness levels and randomized palette coverage, plus **113 mock runtime checks in the validated run** for SDK updates, pause/resume, minimum report spacing and quiet intervals. The runtime assertion count varies with the number of reports observed. These do not access HID hardware and do not replace visual tests.
 
 Exit the bridge and diagnostics, then run `Build-F75.ps1` in Windows PowerShell. It uses the x64 .NET Framework compiler, embeds `F75.ico`, builds both programs and runs the checks. Runtime HID access uses `C:\Program Files\OpenRGB\hidapi-hotplug.dll`; changing that location requires editing the path and rebuilding.
 
-Arguments: `--start-minimized`, `--exit`, `--self-test`, `--runtime-test`. The developer-only `--mock --headless` server uses 6743 and cannot run alongside the real bridge. Runtime tests use an ephemeral local TCP port instead.
+Arguments: `--start-minimized`, `--start-paused`, `--exit`, `--self-test`, `--runtime-test`. The developer-only `--mock --headless` server uses 6743 and cannot run alongside the real bridge. Runtime tests use an ephemeral local TCP port instead.
 
 See [CHANGELOG.md](CHANGELOG.md). No native OpenRGB patch or upstream submission has been made.
 
+
+## Input lockup investigation / prerelease status
+
+One repeated-key / unresponsive-keyboard incident was reported on 0.2.1 through a USB hub; switching wired/2.4 GHz restored input. The owner later reported the battery was very low and may have been dying. The cause is unconfirmed: low battery, the USB/radio environment and lighting load remain possibilities.
+
+The 0.2.2 test candidate replaced frame-average-only timing with minimum report spacing and quiet intervals. A short typing check passed, but animation was choppy. The 0.2.3 candidate restores throughput with precise one-shot waits and a 15 ms per-report floor. After charging, the owner reported very smooth animation and normal typing/backspacing in the short check, without repeated, missing or stuck keys. The incident remains unresolved; neither battery nor pacing has been proven to be its cause. Charge the keyboard and continue normal-use testing. If it recurs, pause or exit the bridge; compare with the bridge closed and the receiver directly connected to the PC before assigning a cause.
+
+Local rotating diagnostic logs record aggregate report/update counts and maximum write duration every 30 seconds, not keystrokes or typed text. Logs are not included in releases. Battery runtime and full login/suspend testing remain pending. This release is experimental.
 ## Credits and license
 
 GPL-2.0-or-later; see `LICENSE-GPL-2.0.txt`.

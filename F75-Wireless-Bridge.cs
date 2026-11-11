@@ -10,6 +10,30 @@ using System.Threading;
 using System.Windows.Forms;
 using System.Drawing;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+static class F75Pacing {
+    internal const double ReportGapMs=15,FrameQuietMs=15,MinimumFrameMs=100;
+    internal static double FrameInterval(int reports){if(reports<1||reports>29)throw new ArgumentOutOfRangeException("reports");return Math.Max(MinimumFrameMs,reports*1000.0/60.0);}
+}
+
+// One-shot waits for the lighting thread; no spinning or global timer-resolution change.
+// https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw
+sealed class F75Delay:IDisposable {
+    [DllImport("kernel32.dll",EntryPoint="CreateWaitableTimerExW",CharSet=CharSet.Unicode,ExactSpelling=true)]static extern IntPtr CreateWaitableTimerEx(IntPtr security,string name,uint flags,uint access);
+    [DllImport("kernel32.dll")]static extern bool SetWaitableTimer(IntPtr timer,ref long due,int period,IntPtr callback,IntPtr arg,bool resume);
+    [DllImport("kernel32.dll")]static extern uint WaitForSingleObject(IntPtr handle,uint timeout);
+    [DllImport("kernel32.dll")]static extern bool CloseHandle(IntPtr handle);
+    IntPtr timer;
+    internal bool HighResolution {get{return timer!=IntPtr.Zero;}}
+    internal F75Delay(){try{timer=CreateWaitableTimerEx(IntPtr.Zero,null,2,0x00100002);}catch(EntryPointNotFoundException){}}
+    internal void Wait(double milliseconds){
+        if(milliseconds<=0)return;
+        long due=-Math.Max(1L,(long)Math.Ceiling(milliseconds*10000));
+        if(timer==IntPtr.Zero || !SetWaitableTimer(timer,ref due,0,IntPtr.Zero,IntPtr.Zero,false) || WaitForSingleObject(timer,1000)!=0)Thread.Sleep((int)Math.Ceiling(milliseconds));
+    }
+    public void Dispose(){if(timer!=IntPtr.Zero){CloseHandle(timer);timer=IntPtr.Zero;}}
+}
 
 sealed class F75WirelessBridge : IDisposable
 {
@@ -35,11 +59,12 @@ sealed class F75WirelessBridge : IDisposable
     readonly object gate=new object(), logGate=new object(), clientsGate=new object();
     readonly List<Client> clients=new List<Client>();
     readonly bool mock;
+    readonly Action<double> observeMockReport;
     volatile bool running=true, available;
     uint[] colors=new uint[80]; bool enabled, paused; int generation;
     volatile bool smooth;
     internal bool Smooth { get { return smooth; } set { smooth=value; } }
-    internal void Pause(bool value) { lock(gate) { paused=value; generation++; } }
+    internal void Pause(bool value) { lock(gate) { paused=value; generation++; } Log(value?"Lighting paused; no lighting writes":"Lighting resumed"); }
     internal bool Paused { get { lock(gate) return paused; } }
     internal long Reports { get { lock(gate) return sentFrames; } }
     internal long Updates { get { lock(gate) return updates; } }
@@ -49,14 +74,16 @@ sealed class F75WirelessBridge : IDisposable
     static byte[] FlattenHardware() { List<byte> v=new List<byte>(); foreach(byte[] row in HardwareRows) v.AddRange(row); return v.ToArray(); }
     static string[] FlattenNames() { List<string> v=new List<string>(); foreach(string[] row in Names) v.AddRange(row); return v.ToArray(); }
     internal int ListeningPort { get { return ((IPEndPoint)listener.LocalEndpoint).Port; } }
-    internal F75WirelessBridge(bool test,int port=Port) {
+    internal F75WirelessBridge(bool test,int port=Port,Action<double> reportObserver=null) {
+        observeMockReport=reportObserver;
         mock=test; logPath=System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,test ? "F75-bridge-mock.log" : "F75-bridge.log");
         listener=new TcpListener(IPAddress.Loopback,port); listener.Start();
         Log("Started on 127.0.0.1:"+Port+"; "+(mock?"MOCK: no HID access":"only 3554:FA09 revision 3000, descriptor-pinned, model CD"));
+        Log("v0.2.3 candidate: report starts >=15ms apart; >=15ms quiet after frames; <=60 reports/s sustained, <=10 frames/s. Input lockup investigation; cause unconfirmed.");
         writer=new Thread(WriteLoop){IsBackground=true}; writer.Start();
         acceptor=new Thread(AcceptLoop){IsBackground=true}; acceptor.Start();
     }
-    void Log(string text) { lock(logGate) { try { File.AppendAllText(logPath,DateTimeOffset.Now.ToString("o")+" "+text+Environment.NewLine); } catch {} } }
+    void Log(string text) { lock(logGate) { try { if(File.Exists(logPath)&&new FileInfo(logPath).Length>2097152){File.Copy(logPath,logPath+".previous",true);File.WriteAllText(logPath,"");}File.AppendAllText(logPath,DateTimeOffset.Now.ToString("o")+" "+text+Environment.NewLine); } catch {} } }
     void SetStatus(string text) { lock(gate) status=text; }
     internal string Status { get { lock(gate) return status+"\r\nLighting: "+(enabled?"active":"released")+" | RGB updates: "+updates+" | HID reports sent: "+sentFrames; } }
     internal void SetColors(uint[] frame,string reason) {
@@ -73,8 +100,9 @@ sealed class F75WirelessBridge : IDisposable
     internal void Release() { lock(gate) { enabled=false; generation++; } Log("Lighting released; no reset/save command sent."); }
     void SetAvailable(bool value) { if(available==value) return; available=value; BroadcastChanged(); }
     void WriteLoop() {
-        F75HidTransport transport=null; Stopwatch clock=Stopwatch.StartNew(); double nextFrameAt=0;
-        try { while(running) {
+        F75HidTransport transport=null; Stopwatch clock=Stopwatch.StartNew(); double nextFrameAt=0,lastReportAt=double.NegativeInfinity,lastHealthAt=0,maxWriteMs=0;
+        using(F75Delay delay=new F75Delay())try { Log("Precise one-shot waits="+delay.HighResolution);while(running) {
+            if(clock.Elapsed.TotalMilliseconds-lastHealthAt>=30000){lastHealthAt=clock.Elapsed.TotalMilliseconds;Log("Health: reports="+Reports+"; updates="+Updates+"; paused="+Paused+"; max_write_ms="+maxWriteMs.ToString("F1",System.Globalization.CultureInfo.InvariantCulture));maxWriteMs=0;}
             if(!mock && transport==null) {
                 try { transport=F75HidTransport.Open(); nextFrameAt=0; SetStatus("Receiver identified: model CD. OpenRGB connection: 127.0.0.1:"+Port); SetAvailable(true); Log("Validated receiver: "+transport.Path); }
                 catch(Exception ex) { SetAvailable(false); SetStatus(ex.Message); Log("Waiting for receiver: "+ex.Message); for(int k=0;k<20 && running;k++) Thread.Sleep(100); continue; }
@@ -82,28 +110,31 @@ sealed class F75WirelessBridge : IDisposable
             if(mock) { SetAvailable(true); SetStatus("MOCK server - no keyboard access"); }
             bool active;lock(gate) active=enabled && !paused;
             if(!active) { Thread.Sleep(25); continue; }
-            if(clock.Elapsed.TotalMilliseconds<nextFrameAt){Thread.Sleep(5);continue;}
+            if(clock.Elapsed.TotalMilliseconds<nextFrameAt){delay.Wait(Math.Min(25,nextFrameAt-clock.Elapsed.TotalMilliseconds));continue;}
             uint[] snapshot;lock(gate)snapshot=(uint[])colors.Clone();
             bool renderSmooth=Smooth;
             try {
                 // On this unit, an Escape-only refresh leaves the other keys dark. Refresh the
                 // complete keyboard frame, including unchanged keys. The firmware cause is unproven.
                 List<byte[]> packets=F75Render.Plan(snapshot,renderSmooth);
-                // Bound long-term radio traffic below the original full-frame renderer.
-                double interval=Math.Max(renderSmooth?50:80,packets.Count*1000.0/70.0);
+                // A frame-average cap alone permits short bursts that may disrupt typing.
+                // Enforce both per-report spacing and a quiet interval after every frame.
+                double interval=F75Pacing.FrameInterval(packets.Count);
                 nextFrameAt=clock.Elapsed.TotalMilliseconds+interval;
                     foreach(byte[] packet in packets) {
+                        while(running && clock.Elapsed.TotalMilliseconds-lastReportAt<F75Pacing.ReportGapMs){if(Paused)break;delay.Wait(F75Pacing.ReportGapMs-(clock.Elapsed.TotalMilliseconds-lastReportAt));}
                         lock(gate) {
                             if(!running || !enabled || paused) break;
-                            if(!mock) transport.Write(packet); sentFrames++;
+                            lastReportAt=clock.Elapsed.TotalMilliseconds;
+                            if(!mock) transport.Write(packet);else if(observeMockReport!=null)observeMockReport(lastReportAt);
+                            maxWriteMs=Math.Max(maxWriteMs,clock.Elapsed.TotalMilliseconds-lastReportAt);sentFrames++;
                         }
-                        Thread.Sleep(renderSmooth?5:12);
                     }
+                nextFrameAt=Math.Max(nextFrameAt,clock.Elapsed.TotalMilliseconds+F75Pacing.FrameQuietMs);
             } catch(Exception ex) {
                 Log("HID failure: "+ex.Message); SetStatus(ex.Message); SetAvailable(false);
                 if(transport!=null) transport.Dispose(); transport=null;
             }
-            Thread.Sleep(10);
         }} finally { SetAvailable(false); if(transport!=null) transport.Dispose(); }
     }
     internal static List<byte[]> Refresh(uint[] snapshot,bool changed,double elapsedMs) {
@@ -202,6 +233,7 @@ sealed class F75WirelessBridge : IDisposable
             using(EventWaitHandle show=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\"+instance+"Show"))
             using(EventWaitHandle quit=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\"+instance+"Quit"))
         try { using(F75WirelessBridge bridge=new F75WirelessBridge(mock)) {
+            if(Array.IndexOf(args,"--start-paused")>=0)bridge.Pause(true);
             if(headless) { Console.WriteLine("F75 bridge listening on 127.0.0.1:"+Port+" (mock="+mock+")"); while(!quit.WaitOne(1000)){} return; }
             F75Experience.Run(bridge,startMinimized,mock,show,quit);
         }} catch(Exception ex) { if(headless) { Console.Error.WriteLine(ex); Environment.ExitCode=1; } else MessageBox.Show(ex.Message,"F75 wireless companion"); }
