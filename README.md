@@ -19,7 +19,7 @@ The keyboard is exposed through the desktop client's SDK connection. Application
 
 Closing or minimizing leaves the app in the tray. Double-click the keyboard icon, choose **Open F75**, or launch the executable again to show the existing 0.2 window. **Exit** stops it. **Pause lighting** stops lighting writes even while OpenRGB sends new colors; Resume uses the latest state. Pause is not saved and does not guarantee immediate LED shutoff.
 
-Create a shortcut to the executable with `--start-minimized` in its target arguments, then place it in the folder opened by **Win+R → shell:startup**. Keep OpenRGB configured to start too, with the 6743 connection saved. This starts at user login, not before login. Keep the executable in its permanent location.
+Create a shortcut to the executable with `--start-minimized` in its target arguments, then place it in the folder opened by **Win+R → shell:startup**. Keep OpenRGB configured to start too, with the 6743 connection saved. This starts at user login, not before login. Keep the executable in its permanent location. If you move or remove it, update or recreate the Startup shortcut to point to the new executable; settings and logs beside the old executable do not move automatically.
 
 Only one 0.2 copy runs per user session. An older bridge can still conflict on port 6743. If mouse/fan effects behave erratically, check for duplicate OpenRGB desktop instances; the normal background service is separate.
 
@@ -43,7 +43,7 @@ Exit the bridge and diagnostics, then run `Build-F75.ps1` in Windows PowerShell.
 
 Arguments: `--start-minimized`, `--start-paused`, `--exit`, `--self-test`, `--runtime-test`. The developer-only `--mock --headless` server uses 6743 and cannot run alongside the real bridge. Runtime tests use an ephemeral local TCP port instead.
 
-See [CHANGELOG.md](CHANGELOG.md). No native OpenRGB patch or upstream submission has been made.
+See [CHANGELOG.md](CHANGELOG.md) and [DEVELOPMENT.md](DEVELOPMENT.md) for recovery, hardware evidence, and remaining tests. No native OpenRGB patch or upstream submission has been made.
 
 
 ## Input lockup investigation / prerelease status
